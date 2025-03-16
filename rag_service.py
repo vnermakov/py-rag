@@ -1,9 +1,12 @@
-from typing import Dict, List, Optional
+from typing import Dict, List
 from langchain.vectorstores import Chroma
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import RetrievalQA
+from langchain_openai import ChatOpenAI
+from langchain_core.runnables import RunnablePassthrough
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.schema import Document
+from langchain.prompts import PromptTemplate
 import uuid
 
 class RAGService:
@@ -25,17 +28,24 @@ class RAGService:
         if user_id not in self.vector_stores:
             self.create_user_collection(user_id)
         
-        texts = self.text_splitter.split_documents(documents)
+        docs = [Document(page_content=text) for text in documents]
+        texts = self.text_splitter.split_documents(docs)
         self.vector_stores[user_id].add_documents(texts)
 
     def query(self, user_id: str, query: str) -> str:
         if user_id not in self.vector_stores:
             raise ValueError("User has no documents indexed")
-        
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=self.llm,
-            chain_type="stuff",
-            retriever=self.vector_stores[user_id].as_retriever()
+            
+        retriever = self.vector_stores[user_id].as_retriever()
+        prompt = PromptTemplate.from_template(
+            """Answer the following question based on the provided context:
+
+            Context: {context}
+            Question: {input}
+
+            Answer:"""
         )
+        document_chain = create_stuff_documents_chain(self.llm, prompt)
+        qa_chain = RunnablePassthrough() | retriever | document_chain
         
-        return qa_chain.run(query)
+        return qa_chain.invoke(query)
